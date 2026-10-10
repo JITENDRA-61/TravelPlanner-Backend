@@ -1,27 +1,36 @@
-# Stage 1: Build the Spring Boot application
-FROM maven:3.9-eclipse-temurin-25 AS build
-
+# Production multi-stage Dockerfile for TravelPlanner
+# Stage 1: Build application with Maven
+FROM maven:3.9-eclipse-temurin-21 AS build
 WORKDIR /app
 
-# Copy Maven configuration and source code
+# Cache dependencies
 COPY pom.xml .
-COPY .mvn .mvn
-COPY mvnw .
 COPY src ./src
 
-# Build the executable JAR
-RUN chmod +x mvnw && ./mvnw -B -DskipTests clean package
+# Build JAR package (skipping tests for quick production build)
+RUN mvn -B -DskipTests clean package
 
-# Stage 2: Run the application
-FROM eclipse-temurin:25-jre
-
+# Stage 2: Lean production runtime
+FROM eclipse-temurin:21-jre-jammy
 WORKDIR /app
 
-# Copy the JAR from the build stage
+# Install curl for health check
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
+# Run as non-root user for security
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+
 COPY --from=build /app/target/*.jar app.jar
 
-# Spring Boot application port
+RUN chown -R appuser:appgroup /app
+USER appuser
+
+ENV PORT=8080
+ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
+
 EXPOSE 8080
 
-# Start the application
-ENTRYPOINT ["java", "-jar", "app.jar"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=35s --retries=3 \
+  CMD curl -f http://localhost:${PORT:-8080}/api/health || exit 1
+
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
